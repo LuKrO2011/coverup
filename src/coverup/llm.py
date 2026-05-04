@@ -1,3 +1,4 @@
+import os
 import typing as T
 import openai
 import logging
@@ -19,6 +20,16 @@ litellm.suppress_debug_info = True
 logging.getLogger().setLevel(logging.ERROR)
 # Ignore unavailable parameters
 litellm.drop_params = True
+
+# Register any custom models that support function calling (comma-separated model names).
+# Used for custom OpenAI-compatible endpoints whose models aren't in litellm's database.
+_fc_models = os.environ.get("COVERUP_SUPPORTS_FUNCTION_CALLING", "")
+for _m in (_fc_models.split(",") if _fc_models else []):
+    _m = _m.strip()
+    if _m:
+        if _m not in litellm.model_cost:
+            litellm.model_cost[_m] = {}
+        litellm.model_cost[_m]["supports_function_calling"] = True
 
 # Tier 5 rate limits for models; tuples indicate limit and interval in seconds
 # Extracted from https://platform.openai.com/account/limits on 8/30/2024
@@ -98,11 +109,12 @@ class ChatterError(Exception):
 
 class Chatter:
     """Chats with an LLM."""
-    def __init__(self, model: str) -> None:
+    def __init__(self, model: str, request_timeout: float | None = None) -> None:
         Chatter._validate_model(model)
 
         self._model = model
         self._model_temperature: float | None = None
+        self._request_timeout = request_timeout
         self._max_backoff = 64 # seconds
         self.token_rate_limit: AsyncLimiter | None
         self.set_token_rate_limit(token_rate_limit_for_model(model))
@@ -217,7 +229,15 @@ class Chatter:
                         self._log_msg(ctx, f"Error: too many tokens for rate limit ({e})")
                         return None # gives up this segment
 
-                return await litellm.acreate(**request)
+                coro = litellm.acreate(**request)
+                if self._request_timeout is not None:
+                    import asyncio as _asyncio
+                    coro = _asyncio.wait_for(coro, timeout=self._request_timeout)
+                return await coro
+
+            except asyncio.TimeoutError:
+                self._log_msg(ctx, f"LLM request timed out after {self._request_timeout}s, giving up")
+                return None
 
             except (litellm.exceptions.ServiceUnavailableError,
                     openai.RateLimitError,
@@ -285,7 +305,10 @@ args:{args}
                 return None
 
             self._log_json(ctx, response.json())
-            self._add_cost(litellm.completion_cost(response))
+            try:
+                self._add_cost(litellm.completion_cost(response))
+            except Exception:
+                pass  # model not in litellm price database; cost tracking unavailable
 
             if response.choices[0].finish_reason != "tool_calls":
                 return response.json()
