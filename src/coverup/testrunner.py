@@ -10,7 +10,8 @@ from .utils import subprocess_run
 
 
 async def measure_test_coverage(*, test: str, tests_dir: Path, pytest_args='',
-                                log_write=None, isolate_tests=False, branch_coverage=True):
+                                log_write=None, isolate_tests=False, branch_coverage=True,
+                                source_dir: T.Optional[Path] = None):
     """Runs a given test and returns the coverage obtained."""
     with tempfile.NamedTemporaryFile(prefix="tmp_test_", suffix='.py', dir=str(tests_dir), mode="w") as t:
         t.write(test)
@@ -19,7 +20,9 @@ async def measure_test_coverage(*, test: str, tests_dir: Path, pytest_args='',
         with tempfile.NamedTemporaryFile(suffix='.json', delete=False) as j:
             try:
                 # -qq to cut down on tokens
-                p = await subprocess_run([sys.executable, '-m', 'slipcover',  *(('--branch',) if branch_coverage else ()),
+                p = await subprocess_run([sys.executable, '-m', 'slipcover',
+                                          *(('--source', str(source_dir)) if source_dir else ()),
+                                          *(('--branch',) if branch_coverage else ()),
                                           '--json', '--out', j.name,
                                           '-m', 'pytest', *pytest_args.split(),
                                           *(('--isolate',) if isolate_tests else ()),
