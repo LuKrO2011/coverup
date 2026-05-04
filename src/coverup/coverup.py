@@ -103,6 +103,9 @@ def parse_args(args=None):
     ap.add_argument('--max-backoff', type=int, default=64,
                     help='max. number of seconds for backoff interval')
 
+    ap.add_argument('--llm-timeout', type=float, default=600,
+                    help='timeout in seconds for each individual LLM request (default: 600)')
+
     ap.add_argument('--dry-run', default=False,
                     action=argparse.BooleanOptionalAction,
                     help=f'whether to actually prompt the model; used for testing')
@@ -188,8 +191,14 @@ def parse_args(args=None):
         ap.error('Specify the model to use with --model')
 
     if args.package_dir:
-        # use parent of package dir as base so that its name is included in module paths
-        args.src_base_dir = args.package_dir.parent
+        # For proper packages (with __init__.py) the parent is the import root so that
+        # the package name is included in module paths (e.g. codetiming/_timer -> codetiming._timer).
+        # For flat single-file modules (no __init__.py) use package_dir itself as the
+        # import root so that first.py -> module "first" not "first.first".
+        if (args.package_dir / "__init__.py").exists():
+            args.src_base_dir = args.package_dir.parent
+        else:
+            args.src_base_dir = args.package_dir
         if not list(args.package_dir.glob("*.py")):
             sources = sorted(args.package_dir.glob("**/*.py"), key=lambda p: len(p.parts))
             suggestion = sources[0].parent if sources else None
@@ -532,6 +541,11 @@ async def improve_coverage(
     messages = prompter.initial_prompt(seg)
     attempts = 0
 
+    import os as _os
+    _sys_prompt = _os.environ.get("COVERUP_SYSTEM_PROMPT")
+    if _sys_prompt:
+        messages = [{"role": "system", "content": _sys_prompt}] + messages
+
     if args.dry_run:
         return True
 
@@ -563,8 +577,9 @@ async def improve_coverage(
             pytest_args = (f"--count={args.repeat_tests} " if args.repeat_tests else "") + args.pytest_args
             coverage = await measure_test_coverage(test=last_test, tests_dir=args.tests_dir,
                                                  pytest_args=pytest_args,
-                                                 isolate_tests=args.isolate_tests,
+                                                 isolate_tests=False,
                                                  branch_coverage=args.branch_coverage,
+                                                 source_dir=args.package_dir,
                                                  log_write=lambda msg: log_write(args, seg, msg))
 
         except subprocess.TimeoutExpired:
@@ -652,7 +667,7 @@ def main():
 
     if args.prompt_for_tests:
         try:
-            chatter = llm.Chatter(model=args.model)
+            chatter = llm.Chatter(model=args.model, request_timeout=args.llm_timeout)
             chatter.set_log_msg(lambda ctx, msg: log_write(args, ctx, msg))
             chatter.set_log_json(lambda ctx, j: log_write(args, ctx, json.dumps(j, indent=2)))
             chatter.set_signal_retry(lambda: state.inc_counter('R'))
