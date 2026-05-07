@@ -119,6 +119,7 @@ class Chatter:
         self.token_rate_limit: AsyncLimiter | None
         self.set_token_rate_limit(token_rate_limit_for_model(model))
         self._add_cost = lambda cost: None
+        self._add_usage = lambda usage: None
         self._log_msg = lambda ctx, msg: None
         self._log_json = lambda ctx, j: None
         self._signal_retry = lambda: None
@@ -174,6 +175,10 @@ class Chatter:
     def set_add_cost(self, add_cost: T.Callable) -> None:
         """Sets up a callback to indicate additional costs."""
         self._add_cost = add_cost
+
+    def set_add_usage(self, add_usage: T.Callable[[dict], None]) -> None:
+        """Sets up a callback to track token usage (input/output)."""
+        self._add_usage = add_usage
 
     def set_log_msg(self, log_msg: T.Callable[[str, str], None]) -> None:
         """Sets up a callback to write a message to the log."""
@@ -309,6 +314,9 @@ args:{args}
                 self._add_cost(litellm.completion_cost(response))
             except Exception:
                 pass  # model not in litellm price database; cost tracking unavailable
+
+            if hasattr(response, 'usage') and response.usage:
+                self._add_usage(dict(response.usage))
 
             if response.choices[0].finish_reason != "tool_calls":
                 return response.json()

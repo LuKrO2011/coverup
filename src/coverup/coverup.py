@@ -435,6 +435,8 @@ class State:
         self._done : T.Dict[Path, T.Set[T.Tuple[int, int]]] = defaultdict(set)
         self._coverage = initial_coverage
         self._cost = 0.0
+        self._input_tokens = 0
+        self._output_tokens = 0
         self._counters = {k:0 for k in PROGRESS_COUNTERS}
         self._final_coverage: dict|None = None
         self._bar: Progress|None = None
@@ -462,6 +464,10 @@ class State:
         self._cost += cost
         if self._bar:
             self._bar.update_cost(self._cost)
+
+    def add_usage(self, usage: dict) -> None:
+        self._input_tokens += usage.get('prompt_tokens', 0)
+        self._output_tokens += usage.get('completion_tokens', 0)
 
 
     def inc_counter(self, key: str):
@@ -491,11 +497,15 @@ class State:
                 if ckpt['version'] != 2: return None
                 assert 'done' in ckpt
                 assert 'cost' in ckpt
+                assert 'input_tokens' in ckpt
+                assert 'output_tokens' in ckpt
                 assert 'counters' in ckpt
                 assert 'coverage' in ckpt, "coverage information missing in checkpoint"
 
                 state = State(ckpt['coverage'])
                 state._cost = ckpt['cost']
+                state._input_tokens = ckpt.get('input_tokens', 0)
+                state._output_tokens = ckpt.get('output_tokens', 0)
                 state._counters = ckpt['counters']
                 for filename, done_list in ckpt['done'].items():
                     state._done[Path(filename).resolve()] = set(tuple(d) for d in done_list)
@@ -511,6 +521,8 @@ class State:
             'version': 2,
             'done': {str(k):list(v) for k,v in self._done.items() if len(v)}, # cannot serialize 'Path' or 'set' as-is
             'cost': self._cost,
+            'input_tokens': self._input_tokens,
+            'output_tokens': self._output_tokens,
             'counters': self._counters,
             'coverage': self._coverage,
             **({'final_coverage': self._final_coverage} if self._final_coverage else {})
@@ -722,6 +734,7 @@ def main():
         # TODO also show running coverage estimate
 
         chatter.set_add_cost(state.add_cost)
+        chatter.set_add_usage(state.add_usage)
 
         segments = sorted(get_missing_coverage(state.get_initial_coverage(), line_limit=args.line_limit),
                           key=lambda seg: seg.missing_count(), reverse=True)
