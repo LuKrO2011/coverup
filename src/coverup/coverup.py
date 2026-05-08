@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 
 import argparse
 import subprocess
@@ -105,6 +106,9 @@ def parse_args(args=None):
 
     ap.add_argument('--llm-timeout', type=float, default=600,
                     help='timeout in seconds for each individual LLM request (default: 600)')
+
+    ap.add_argument('--module-timeout', type=float, default=None,
+                    help='wall-clock budget in seconds for this pass (default: no limit)')
 
     ap.add_argument('--dry-run', default=False,
                     action=argparse.BooleanOptionalAction,
@@ -668,6 +672,7 @@ def main():
 
     global state
     args = parse_args()
+    deadline: float | None = (time.monotonic() + args.module_timeout) if args.module_timeout else None
 
     if not args.tests_dir.exists():
         print(f'Directory "{args.tests_dir}" does not exist. Please specify the correct one or create it.')
@@ -749,6 +754,11 @@ def main():
         print("(in the following, G=good, F=failed, U=useless and R=retry)")
 
         async def work_segment(seg: CodeSegment) -> None:
+            if deadline is not None and time.monotonic() > deadline:
+                log_write(args, seg, "Skipping: module timeout exceeded")
+                progress.signal_one_completed()
+                return
+
             if await improve_coverage(args, chatter, prompter, seg):
                 # Only mark done if was able to complete (True return),
                 # so that it can be retried after installing any missing modules
