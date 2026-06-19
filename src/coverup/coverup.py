@@ -754,15 +754,21 @@ def main():
         print("(in the following, G=good, F=failed, U=useless and R=retry)")
 
         async def work_segment(seg: CodeSegment) -> None:
+            nonlocal deadline
             if deadline is not None and time.monotonic() > deadline:
                 log_write(args, seg, "Skipping: module timeout exceeded")
                 progress.signal_one_completed()
                 return
 
+            llm_time_before = chatter.total_llm_time
             if await improve_coverage(args, chatter, prompter, seg):
                 # Only mark done if was able to complete (True return),
                 # so that it can be retried after installing any missing modules
                 state.mark_done(seg)
+            # Extend the deadline by however long the LLM took for this segment,
+            # so that slow LLM responses don't consume the search-time budget.
+            if deadline is not None:
+                deadline += chatter.total_llm_time - llm_time_before
 
             if args.checkpoint:
                 state.save_checkpoint(args.checkpoint)

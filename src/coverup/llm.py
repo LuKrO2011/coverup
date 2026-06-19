@@ -126,6 +126,7 @@ class Chatter:
         self._functions: dict[str, dict[str, T.Any]] = dict()
         self._max_func_calls_per_chat = 50
         self._extra_request_pars: dict[str, T.Any] | None = None
+        self.total_llm_time: float = 0.0  # cumulative wall time spent waiting for LLM responses
 
     @staticmethod
     def _validate_model(model) -> None:
@@ -238,7 +239,12 @@ class Chatter:
                 if self._request_timeout is not None:
                     import asyncio as _asyncio
                     coro = _asyncio.wait_for(coro, timeout=self._request_timeout)
-                return await coro
+                import time as _time
+                _t0 = _time.monotonic()
+                try:
+                    return await coro
+                finally:
+                    self.total_llm_time += _time.monotonic() - _t0
 
             except asyncio.TimeoutError:
                 self._log_msg(ctx, f"LLM request timed out after {self._request_timeout}s, giving up")
